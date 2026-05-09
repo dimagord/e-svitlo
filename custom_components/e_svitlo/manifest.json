@@ -1,0 +1,12 @@
+{
+  "domain": "e_svitlo",
+  "name": "e-svitlo (Сумиобленерго)",
+  "version": "0.1.0",
+  "config_flow": true,
+  "documentation": "https://github.com/dmytr/e-svitlo",
+  "issue_tracker": "https://github.com/dmytr/e-svitlo/issues",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": ["@dmytr"],
+  "iot_class": "cloud_polling"
+}

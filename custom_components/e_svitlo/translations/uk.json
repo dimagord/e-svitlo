@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Підключення до e-svitlo",
+        "description": "Введіть дані для входу в особистий кабінет e-svitlo.",
+        "data": {
+          "base_url": "Базова URL",
+          "email": "Email або телефон",
+          "password": "Пароль"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Неправильний email або пароль.",
+      "cannot_connect": "Не вдалося підключитися до сервера. Перевірте базову URL."
+    },
+    "abort": {
+      "already_configured": "Цей акаунт вже налаштовано."
+    }
+  }
+}

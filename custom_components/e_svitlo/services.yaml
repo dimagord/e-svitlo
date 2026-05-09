@@ -1,0 +1,51 @@
+submit_meter_reading:
+  name: Submit meter reading
+  description: >
+    Submit electricity meter readings to e-svitlo (sm.e-svitlo.com.ua).
+    The service validates that new values are not less than the last recorded reading.
+  fields:
+    account_id:
+      name: Account ID
+      description: >
+        Internal account ID (the "a" parameter from the website URL, e.g. "198395").
+        Not the same as the printed personal account number.
+      required: true
+      example: "198395"
+      selector:
+        text:
+    zone1:
+      name: Zone 1 (day)
+      description: Current meter reading for Zone 1 (day tariff zone).
+      required: true
+      example: 29500
+      selector:
+        number:
+          min: 0
+          max: 999999
+          mode: box
+    zone2:
+      name: Zone 2 (night)
+      description: >
+        Current meter reading for Zone 2 (night tariff zone).
+        Leave at 0 for single-zone meters.
+      required: false
+      default: 0
+      example: 0
+      selector:
+        number:
+          min: 0
+          max: 999999
+          mode: box
+    zone3:
+      name: Zone 3
+      description: >
+        Current meter reading for Zone 3 (three-zone meters only).
+        Leave at 0 for single- or two-zone meters.
+      required: false
+      default: 0
+      example: 0
+      selector:
+        number:
+          min: 0
+          max: 999999
+          mode: box
