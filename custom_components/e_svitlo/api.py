@@ -1,6 +1,7 @@
 """Async API client for sm.e-svitlo.com.ua."""
 from __future__ import annotations
 
+import asyncio
 import re
 from html.parser import HTMLParser
 from typing import Any
@@ -88,6 +89,7 @@ class ESvitloClient:
         self._email = email
         self._password = password
         self._session: aiohttp.ClientSession | None = None
+        self._lock = asyncio.Lock()
 
     def _make_session(self) -> aiohttp.ClientSession:
         return aiohttp.ClientSession(
@@ -126,12 +128,13 @@ class ESvitloClient:
 
     async def _get_html(self, path: str, params: dict[str, str] | None = None) -> str:
         session = await self._ensure_session()
-        async with session.get(self._url(path), params=params, allow_redirects=True) as resp:
-            text = await resp.text(encoding="utf-8")
-            # Session expired → redirected to login page
-            if resp.url.path == "/" and "login" not in resp.url.path:
-                return ""
-            return text
+        async with self._lock:
+            async with session.get(self._url(path), params=params, allow_redirects=True) as resp:
+                text = await resp.text(encoding="utf-8")
+                # Session expired → redirected to login page
+                if resp.url.path == "/" and "login" not in resp.url.path:
+                    return ""
+                return text
 
     async def _ensure_logged_in(self, path: str, params: dict[str, str] | None = None) -> str:
         """GET page, re-login once if session has expired."""
@@ -279,14 +282,15 @@ class ESvitloClient:
             "a": account_id,
             "zgen": "",
         }
-        async with session.post(
-            self._url(URL_SUBMIT),
-            data=payload,
-            allow_redirects=True,
-        ) as resp:
-            text = await resp.text(encoding="utf-8")
-            # Session expired → redirected to login page
-            if resp.url.path == "/" and retry:
-                await self.login()
-                return await self._do_submit(account_id, z1, z2, z3, retry=False)
-            return text
+        async with self._lock:
+            async with session.post(
+                self._url(URL_SUBMIT),
+                data=payload,
+                allow_redirects=True,
+            ) as resp:
+                text = await resp.text(encoding="utf-8")
+                # Session expired → redirected to login page
+                if resp.url.path == "/" and retry:
+                    await self.login()
+                    return await self._do_submit(account_id, z1, z2, z3, retry=False)
+                return text
