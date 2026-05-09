@@ -11,7 +11,8 @@ from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
 
 from .api import ESvitloClient
-from .const import CONF_BASE_URL, DOMAIN
+from .const import CONF_BASE_URL, DOMAIN, PLATFORMS
+from .coordinator import ESvitloCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,14 +37,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         email=entry.data["email"],
         password=entry.data["password"],
     )
-    # Authenticate eagerly so we know it works at startup.
     try:
         await client.login()
     except Exception as err:
         _LOGGER.error("e-svitlo: failed to authenticate at startup: %s", err)
-        # Don't fail setup — login will be retried on first service call.
 
-    hass.data[DOMAIN][entry.entry_id] = client
+    # Build one coordinator per account
+    accounts = entry.data.get("accounts", [])
+    coordinators: dict[str, ESvitloCoordinator] = {}
+    for acc in accounts:
+        acc_id = acc["internal_id"]
+        coordinators[acc_id] = ESvitloCoordinator(
+            hass,
+            client,
+            account_id=acc_id,
+            account_name=acc.get("name", acc_id),
+        )
+
+    hass.data[DOMAIN][entry.entry_id] = {
+        "client": client,
+        "coordinators": coordinators,
+    }
+
+    # Forward setup to sensor platform
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     async def handle_submit_reading(call: ServiceCall) -> None:
         account_id: str = call.data["account_id"]
@@ -56,13 +73,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             account_id, z1, z2, z3,
         )
 
-        # Validate new reading is not less than previous (safety check).
         try:
             info = await client.get_meter_info(account_id)
         except Exception as err:
-            raise HomeAssistantError(
-                f"e-svitlo: could not fetch meter info: {err}"
-            ) from err
+            raise HomeAssistantError(f"e-svitlo: could not fetch meter info: {err}") from err
 
         if not info["submission_allowed"]:
             raise HomeAssistantError(
@@ -89,9 +103,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 result[:200] if result else "(empty)",
             )
         except Exception as err:
-            raise HomeAssistantError(
-                f"e-svitlo: submission failed: {err}"
-            ) from err
+            raise HomeAssistantError(f"e-svitlo: submission failed: {err}") from err
+
+        # Refresh coordinator data after successful submission
+        if account_id in coordinators:
+            await coordinators[account_id].async_request_refresh()
 
     hass.services.async_register(
         DOMAIN,
@@ -105,12 +121,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    client: ESvitloClient = hass.data[DOMAIN].pop(entry.entry_id, None)
-    if client:
-        await client.close()
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+    if unloaded:
+        entry_data = hass.data[DOMAIN].pop(entry.entry_id, {})
+        client: ESvitloClient | None = entry_data.get("client")
+        if client:
+            await client.close()
 
     if not hass.data[DOMAIN]:
         hass.services.async_remove(DOMAIN, SERVICE_SUBMIT_READING)
         hass.data.pop(DOMAIN, None)
 
-    return True
+    return unloaded

@@ -9,6 +9,8 @@ import aiohttp
 
 from .const import (
     URL_ACCOUNTS,
+    URL_CONSUMPTION_YEAR,
+    URL_DETAILS,
     URL_LOGIN,
     URL_METER_PAGE,
     URL_SUBMIT,
@@ -177,6 +179,74 @@ class ESvitloClient:
             "last_z2": _extract("previous_data_z2"),
             "last_z3": _extract("previous_data_z3"),
             "submission_allowed": "Внести покази дозволено" in html,
+        }
+
+    async def get_account_details(self, account_id: str) -> dict[str, Any]:
+        """Fetch balance, last payment, and last meter readings for an account."""
+        html = await self._ensure_logged_in(
+            URL_DETAILS,
+            {"a": account_id, "highlight": "account_household", "osr": "1"},
+        )
+
+        def _borg(label: str) -> str | None:
+            m = re.search(
+                rf'class="borg-text"[^>]*>\s*{re.escape(label)}\s*</div>\s*<div[^>]*class="borg-response"[^>]*>([^<]+)',
+                html,
+            )
+            return m.group(1).strip() if m else None
+
+        def _parse_amount(raw: str | None) -> float | None:
+            if not raw:
+                return None
+            m = re.search(r"([\d.,]+)", raw)
+            return float(m.group(1).replace(",", ".")) if m else None
+
+        balance_raw = _borg("Заборгованість")
+        last_payment_raw = _borg("Остання оплата")
+        last_payment_date = _borg("Дата останньої оплати")
+
+        # Last readings: date in class="second-column", values in <b> tags
+        last_reading_date: str | None = None
+        m_date = re.search(r'class="second-column">(\d{2}\.\d{2}\.\d{4})</div>', html)
+        if m_date:
+            last_reading_date = m_date.group(1)
+
+        readings: list[int] = []
+        m_section = re.search(
+            r'Останні розрахункові покази лічильника</div>(.*?)(?:class="wrap-personal|<h2|<hr)',
+            html,
+            re.DOTALL,
+        )
+        if m_section:
+            readings = [int(v) for v in re.findall(r"<b>(\d+)</b>", m_section.group(1))]
+
+        # Monthly consumption from JSON endpoint
+        monthly: dict[str, Any] = {}
+        session = await self._ensure_session()
+        try:
+            async with session.get(
+                self._url(URL_CONSUMPTION_YEAR), params={"a": account_id}
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    monthly = data.get("res", {})
+        except Exception:
+            pass
+
+        # Latest month is the one with the highest period key
+        latest_consumption: int | None = None
+        if monthly:
+            latest_key = max(monthly.keys())
+            latest_consumption = monthly[latest_key].get("cons")
+
+        return {
+            "balance": _parse_amount(balance_raw),
+            "last_payment": _parse_amount(last_payment_raw),
+            "last_payment_date": last_payment_date,
+            "last_reading_date": last_reading_date,
+            "last_z1": readings[0] if readings else None,
+            "last_z2": readings[1] if len(readings) > 1 else None,
+            "monthly_consumption": latest_consumption,
         }
 
     async def submit_reading(
