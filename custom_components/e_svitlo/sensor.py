@@ -13,6 +13,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -94,6 +95,7 @@ async def async_setup_entry(
 ) -> None:
     coordinators: dict[str, ESvitloCoordinator] = hass.data[DOMAIN][entry.entry_id]["coordinators"]
     entities: list[ESvitloSensor] = []
+    registry = er.async_get(hass)
 
     for coordinator in coordinators.values():
         # Do initial refresh to know zone count before adding entities
@@ -102,8 +104,14 @@ async def async_setup_entry(
         has_z2 = data.get("last_z2") is not None
 
         for description in SENSOR_TYPES:
-            if not description.always_add and description.key == "last_reading_z2" and not has_z2:
-                continue
+            if not description.always_add and description.key == "last_reading_z2":
+                if not has_z2:
+                    stale = registry.async_get_entity_id(
+                        "sensor", DOMAIN, f"{coordinator.account_id}_last_reading_z2"
+                    )
+                    if stale:
+                        registry.async_remove(stale)
+                    continue
             entities.append(ESvitloSensor(coordinator, description))
 
     async_add_entities(entities)

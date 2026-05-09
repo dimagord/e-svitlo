@@ -227,12 +227,13 @@ class ESvitloClient:
         monthly: dict[str, Any] = {}
         session = await self._ensure_session()
         try:
-            async with session.get(
-                self._url(URL_CONSUMPTION_YEAR), params={"a": account_id}
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json(content_type=None)
-                    monthly = data.get("res", {})
+            async with self._lock:
+                async with session.get(
+                    self._url(URL_CONSUMPTION_YEAR), params={"a": account_id}
+                ) as resp:
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                        monthly = data.get("res", {})
         except Exception:
             pass
 
@@ -289,8 +290,9 @@ class ESvitloClient:
                 allow_redirects=True,
             ) as resp:
                 text = await resp.text(encoding="utf-8")
-                # Session expired → redirected to login page
-                if resp.url.path == "/" and retry:
-                    await self.login()
-                    return await self._do_submit(account_id, z1, z2, z3, retry=False)
-                return text
+                expired = resp.url.path == "/" and retry
+        # Lock released before retry to avoid re-entrant deadlock
+        if expired:
+            await self.login()
+            return await self._do_submit(account_id, z1, z2, z3, retry=False)
+        return text
