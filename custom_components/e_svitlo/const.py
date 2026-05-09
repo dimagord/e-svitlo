@@ -12,7 +12,7 @@ URL_METER_PAGE = "/account_household/insert_calc_value"
 URL_SUBMIT = "/account_household/ins_calc_val"
 URL_CONSUMPTION_YEAR = "/account_household/show_graf_consumption_year"
 
-PLATFORMS = ["sensor"]
+PLATFORMS = ["sensor", "number", "button"]
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
