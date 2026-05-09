@@ -34,7 +34,6 @@ SENSOR_TYPES: tuple[ESvitloSensorDescription, ...] = (
         name="Balance",
         native_unit_of_measurement="UAH",
         device_class=SensorDeviceClass.MONETARY,
-        state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:currency-uah",
     ),
     ESvitloSensorDescription(
@@ -43,7 +42,6 @@ SENSOR_TYPES: tuple[ESvitloSensorDescription, ...] = (
         name="Last payment",
         native_unit_of_measurement="UAH",
         device_class=SensorDeviceClass.MONETARY,
-        state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:cash-check",
     ),
     ESvitloSensorDescription(
