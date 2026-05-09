@@ -11,7 +11,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CURRENCY_HRYVNIA, UnitOfEnergy
+from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -32,7 +32,7 @@ SENSOR_TYPES: tuple[ESvitloSensorDescription, ...] = (
         key="balance",
         data_key="balance",
         name="Balance",
-        native_unit_of_measurement=CURRENCY_HRYVNIA,
+        native_unit_of_measurement="UAH",
         device_class=SensorDeviceClass.MONETARY,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:currency-uah",
@@ -41,7 +41,7 @@ SENSOR_TYPES: tuple[ESvitloSensorDescription, ...] = (
         key="last_payment",
         data_key="last_payment",
         name="Last payment",
-        native_unit_of_measurement=CURRENCY_HRYVNIA,
+        native_unit_of_measurement="UAH",
         device_class=SensorDeviceClass.MONETARY,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:cash-check",
