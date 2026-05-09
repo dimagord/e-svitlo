@@ -37,12 +37,6 @@ class ESvitloCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
-            details = await self.client.get_account_details(self.account_id)
-            meter = await self.client.get_meter_info(self.account_id)
-            details["zone_count"] = meter["zone_count"]
-            details["last_z1"] = meter["last_z1"] or details.get("last_z1")
-            details["last_z2"] = meter["last_z2"] if meter["zone_count"] >= 2 else None
-            details["submission_allowed"] = meter["submission_allowed"]
-            return details
+            return await self.client.get_full_account_data(self.account_id)
         except Exception as err:
             raise UpdateFailed(f"Error fetching e-svitlo data for {self.account_id}: {err}") from err

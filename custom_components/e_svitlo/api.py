@@ -65,7 +65,6 @@ class _AccountTableParser(HTMLParser):
             self._current_cell = ""
         elif tag == "tr" and self._in_row:
             self._in_row = False
-            # Expect at least 3 cells: personal_no, name, address
             if self._internal_id and len(self._cells) >= 3:
                 self.accounts.append(
                     {
@@ -122,7 +121,6 @@ class ESvitloClient:
             allow_redirects=True,
         ) as resp:
             final_url = str(resp.url)
-            # Successful login redirects to /user_register; failure stays at /
             if final_url.rstrip("/") == self._base_url or "login" in final_url:
                 raise AuthError("Login failed — check credentials")
 
@@ -131,7 +129,6 @@ class ESvitloClient:
         async with self._lock:
             async with session.get(self._url(path), params=params, allow_redirects=True) as resp:
                 text = await resp.text(encoding="utf-8")
-                # Session expired → redirected to login page
                 if resp.url.path == "/" and "login" not in resp.url.path:
                     return ""
                 return text
@@ -144,29 +141,12 @@ class ESvitloClient:
             html = await self._get_html(path, params)
         return html
 
-    async def get_accounts(self) -> list[ESvitloAccount]:
-        """Return list of household accounts linked to this user."""
-        html = await self._ensure_logged_in(URL_ACCOUNTS)
-        parser = _AccountTableParser()
-        parser.feed(html)
-        return [
-            ESvitloAccount(
-                internal_id=a["internal_id"],
-                personal_no=a["personal_no"],
-                name=a["name"],
-                address=a["address"],
-            )
-            for a in parser.accounts
-        ]
+    # ------------------------------------------------------------------
+    # HTML/JS parsing helpers (no HTTP calls)
+    # ------------------------------------------------------------------
 
-    async def get_meter_info(self, account_id: str) -> dict[str, Any]:
-        """Return zone count and last readings for an account.
-
-        Returns dict with keys: zone_count (int), last_z1, last_z2, last_z3 (int).
-        """
-        html = await self._ensure_logged_in(
-            URL_METER_PAGE, {"a": account_id, "highlight": "insert_calc_value", "osr": "1"}
-        )
+    @staticmethod
+    def _parse_meter_html(html: str) -> dict[str, Any]:
         zone_count = 1
         m = re.search(r"const current_zone\s*=\s*`(\d+)`", html)
         if m:
@@ -184,13 +164,8 @@ class ESvitloClient:
             "submission_allowed": "Внести покази дозволено" in html,
         }
 
-    async def get_account_details(self, account_id: str) -> dict[str, Any]:
-        """Fetch balance, last payment, and last meter readings for an account."""
-        html = await self._ensure_logged_in(
-            URL_DETAILS,
-            {"a": account_id, "highlight": "account_household", "osr": "1"},
-        )
-
+    @staticmethod
+    def _parse_details_html(html: str) -> dict[str, Any]:
         def _borg(label: str) -> str | None:
             m = re.search(
                 rf'class="borg-text"[^>]*>\s*{re.escape(label)}\s*</div>\s*<div[^>]*class="borg-response"[^>]*>([^<]+)',
@@ -208,7 +183,6 @@ class ESvitloClient:
         last_payment_raw = _borg("Остання оплата")
         last_payment_date = _borg("Дата останньої оплати")
 
-        # Last readings: date in class="second-column", values in <b> tags
         last_reading_date: str | None = None
         m_date = re.search(r'class="second-column">(\d{2}\.\d{2}\.\d{4})</div>', html)
         if m_date:
@@ -223,26 +197,6 @@ class ESvitloClient:
         if m_section:
             readings = [int(v) for v in re.findall(r"<b>(\d+)</b>", m_section.group(1))]
 
-        # Monthly consumption from JSON endpoint
-        monthly: dict[str, Any] = {}
-        session = await self._ensure_session()
-        try:
-            async with self._lock:
-                async with session.get(
-                    self._url(URL_CONSUMPTION_YEAR), params={"a": account_id}
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json(content_type=None)
-                        monthly = data.get("res", {})
-        except Exception:
-            pass
-
-        # Latest month is the one with the highest period key
-        latest_consumption: int | None = None
-        if monthly:
-            latest_key = max(monthly.keys())
-            latest_consumption = monthly[latest_key].get("cons")
-
         return {
             "balance": _parse_amount(balance_raw),
             "last_payment": _parse_amount(last_payment_raw),
@@ -250,6 +204,102 @@ class ESvitloClient:
             "last_reading_date": last_reading_date,
             "last_z1": readings[0] if readings else None,
             "last_z2": readings[1] if len(readings) > 1 else None,
+        }
+
+    # ------------------------------------------------------------------
+    # Public API methods
+    # ------------------------------------------------------------------
+
+    async def get_accounts(self) -> list[ESvitloAccount]:
+        """Return list of household accounts linked to this user."""
+        html = await self._ensure_logged_in(URL_ACCOUNTS)
+        parser = _AccountTableParser()
+        parser.feed(html)
+        return [
+            ESvitloAccount(
+                internal_id=a["internal_id"],
+                personal_no=a["personal_no"],
+                name=a["name"],
+                address=a["address"],
+            )
+            for a in parser.accounts
+        ]
+
+    async def get_meter_info(self, account_id: str) -> dict[str, Any]:
+        """Return zone count, last readings and submission window for an account."""
+        html = await self._ensure_logged_in(
+            URL_METER_PAGE, {"a": account_id, "highlight": "insert_calc_value", "osr": "1"}
+        )
+        return self._parse_meter_html(html)
+
+    async def get_full_account_data(self, account_id: str, *, _retry: bool = True) -> dict[str, Any]:
+        """Fetch all data for one account under a single lock acquisition.
+
+        Navigates to the meter page first (which sets the server-side session
+        to this account), then immediately fetches the details page and the
+        consumption JSON — all without releasing the lock.  This prevents
+        a concurrent coordinator from switching the server session to a
+        different account between requests.
+        """
+        session = await self._ensure_session()
+        meter_html = ""
+        details_html = ""
+        monthly: dict[str, Any] = {}
+
+        async with self._lock:
+            # Step 1: meter page — sets server session to account_id
+            async with session.get(
+                self._url(URL_METER_PAGE),
+                params={"a": account_id, "highlight": "insert_calc_value", "osr": "1"},
+                allow_redirects=True,
+            ) as resp:
+                meter_html = await resp.text(encoding="utf-8")
+                if resp.url.path == "/":
+                    meter_html = ""
+
+            if meter_html:
+                # Step 2: details page — session is now guaranteed to be this account
+                async with session.get(
+                    self._url(URL_DETAILS),
+                    params={"a": account_id, "highlight": "account_household", "osr": "1"},
+                    allow_redirects=True,
+                ) as resp:
+                    details_html = await resp.text(encoding="utf-8")
+                    if resp.url.path == "/":
+                        details_html = ""
+
+                # Step 3: consumption JSON
+                try:
+                    async with session.get(
+                        self._url(URL_CONSUMPTION_YEAR),
+                        params={"a": account_id},
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json(content_type=None)
+                            monthly = (data or {}).get("res", {})
+                except Exception:
+                    pass
+
+        if not meter_html:
+            if _retry:
+                await self.login()
+                return await self.get_full_account_data(account_id, _retry=False)
+            return {}
+
+        meter = self._parse_meter_html(meter_html)
+        details = self._parse_details_html(details_html)
+
+        latest_consumption: int | None = None
+        if monthly:
+            latest_key = max(monthly.keys())
+            latest_consumption = monthly[latest_key].get("cons")
+
+        return {
+            **details,
+            "zone_count": meter["zone_count"],
+            "last_z1": meter["last_z1"] or details.get("last_z1"),
+            "last_z2": meter["last_z2"] if meter["zone_count"] >= 2 else None,
+            "submission_allowed": meter["submission_allowed"],
             "monthly_consumption": latest_consumption,
         }
 
@@ -260,10 +310,7 @@ class ESvitloClient:
         z2: int = 0,
         z3: int = 0,
     ) -> str:
-        """Submit meter reading. Returns raw response text.
-
-        Re-authenticates once if session has expired.
-        """
+        """Submit meter reading. Returns raw response text."""
         return await self._do_submit(account_id, z1, z2, z3, retry=True)
 
     async def _do_submit(
